@@ -20,11 +20,23 @@ def l2_loss(y_true, y_pred):
     #print(f"loss: {loss}")
     return loss
 
-classes=['BG_MV', 'BG_ST', 'fall_down', 'patpat', 'quickDown', 'quickUp', 'swipDown', 'swipLeft', 'swipRight', 'swipUp']
-classes_Text=['None', 'None', 'Warning', 'Safe', 'open/close water', 'open/close music', 'watertempdown', 'prev music', 'next music', 'watertempup']
+classes = ['BathBackground', 'falldown', 'nono', 'patpat', 'slowUp', 'swipeDown', 'swipeLeft', 'swipeRight', 'swipeUp', 'BathBackground', 'BathBackground']
+classes_Text = [
+    'BackGround',       # BG_Static
+    'Warning',          # falldown
+    'open/close water', # nono
+    'Safe',             # patpat
+    'open/close music', # slowUp
+    'watertempdDown',   # swipeDown
+    'prev music',       # swipeLeft
+    'next music',       # swipeRight
+    'watertempdUp',     # swipeUp
+    'BackGround',       # BG_MV_809
+    'BackGround'
+]
 # classes=['fall_down', 'patpat', 'quickDown', 'quickUp', 'rollin', 'rollout', 'swipLeft', 'swipRight', 'None']
-CNNmodel = tf.keras.models.load_model('stage1_without_dense_n1.h5', custom_objects={'l2_loss': l2_loss})
-LSTMmodel = tf.keras.models.load_model('CNNTL_LSTM_NEW_stage1_Slice.h5', compile=False)
+CNNmodel = tf.keras.models.load_model('CNN_epoch_200_stage2_without_dense.h5', custom_objects={'l2_loss': l2_loss})
+LSTMmodel = tf.keras.models.load_model('LSTM_epoch_10_stage2_slice.h5', compile=False)
 
 label_encoder = LabelEncoder()
 label_encoder.fit(classes)
@@ -146,7 +158,7 @@ def startLoop(app):
         if rec.count(max(rec, key=rec.count)) > 3 and max(rec, key=rec.count)!=0 and max(rec, key=rec.count)==np.argmax(LSTMout, axis=1)[0] and back_truth and timesleeper==0:
             app.update_label(classes[max(rec, key=rec.count)], classes_Text[max(rec, key=rec.count)])
         elif timesleeper==0:
-            app.update_label('None', 'sosad:(')
+            app.update_label('None', 'background')
 
         if timesleeper < 6:
             timesleeper+=1

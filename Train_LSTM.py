@@ -25,9 +25,9 @@ x = tf.keras.layers.Dense(12, activation=None)(x)
 x = tf.keras.layers.Softmax()(x)
 
 model = tf.keras.Model(inputs=main_input, outputs=x)
-
+optimizer=tf.keras.optimizers.Adam()
+model.compile(optimizer=optimizer, loss='categorical_crossentropy', metrics=['accuracy'])
 model.summary()
-model.compile(optimizer=tf.keras.optimizers.Adam(), loss='categorical_crossentropy', metrics=['accuracy'])
 
 # %%
 # %%
@@ -78,73 +78,81 @@ print(np.shape(data_test_labels))
 
 # %%
 import numpy as np
-
-def slice_35(data, sequence_length=35):
-    sequences = []
-    for i in range(len(data) - sequence_length + 1):
-        sequences.append(data[i:i + sequence_length, :])
-    return np.array(sequences)
-
-# %%
-def load_and_select_data(num_selections, num_bg_classes=3, num_gesture_classes=9, validation_split=0.1):
-    # Load datasets
-    path1 = "LSTM_STAGE1/Predict_BackGround_MV_809.npy"
+# 背景隨機採樣
+def load_and_select_data(num_selections, num_bg_classes=3, num_gesture_classes=9, validation_split=0.1, TimeSp=35):
+    path1 = "LSTM_STAGE1/BackGround_falldown.npy"
     data1 = np.load(path1)
+    labels1 = np.full(len(data1), fill_value=9)  # Background 1
 
-    path2 = "LSTM_STAGE1/Predict_BackGround_MV_809_pat.npy"
+    path2 = "LSTM_STAGE1/BackGround_MV_809_pat.npy"
     data2 = np.load(path2)
+    labels2 = np.full(len(data2), fill_value=10)  # Background 2
 
-    path3 = "LSTM_STAGE1/Predict_BackGround_falldown.npy"
+    path3 = "LSTM_STAGE1/BackGround_MV_809.npy"
     data3 = np.load(path3)
+    labels3 = np.full(len(data3), fill_value=11)  # Background 2
 
-    total_elements_data1 = data1.shape[-1]
-    total_elements_data2 = data2.shape[-1]
-    total_elements_data3 = data3.shape[-1]
+    def slice35(data, labels, TimeSp):
+        segments = []
+        segment_labels = []
+        for j in range(len(data)):
+            if j + TimeSp > len(data):
+                break
+            segment = data[j:j + TimeSp, :]
+            segments.append(segment)
+            segment_labels.append(labels[j])
+        
+        return np.array(segments), np.array(segment_labels)
 
-    weight1 = 1.0
-    weight2 = 10.0
-    weight3 = 17.0
+    data1_segments, labels1_segments = slice35(data1, labels1, TimeSp)
+    data2_segments, labels2_segments = slice35(data2, labels2, TimeSp)
+    data3_segments, labels3_segments = slice35(data3, labels3, TimeSp)
 
-    weights = [weight1] * total_elements_data1 + [weight2] * total_elements_data2 + [weight3] * total_elements_data3
-    total_weight = np.sum(weights)
-    probabilities = np.array(weights) / total_weight
+    all_segments = np.concatenate([data1_segments, data2_segments, data3_segments], axis=0)
+    all_labels = np.concatenate([labels1_segments, labels2_segments, labels3_segments], axis=0)
 
-    cdf = np.cumsum(probabilities)
-    uniform_random_numbers = np.random.uniform(0, cdf[-1], size=num_selections)
-    selected_indices = np.searchsorted(cdf, uniform_random_numbers)
+    class_proportions = {
+        9: 0.3,
+        10: 0.3,
+        11: 0.3
+    }
 
-    selected_data = []
+    num_classes = num_bg_classes + num_gesture_classes
+    selected_segments = []
     selected_labels = []
 
-    bg_labels_12 = np.zeros((num_bg_classes, 12))
-    bg_labels_12[np.arange(num_bg_classes), np.arange(num_bg_classes) + 9] = 1
+    for class_id, proportion in class_proportions.items():
+        class_indices = np.where(all_labels == class_id)[0]
+        num_class_samples = int(proportion * num_selections)
 
-    for index in selected_indices:
-        if index < total_elements_data1:
-            selected_data.append(data1[index])
-            selected_labels.append(bg_labels_12[index % num_bg_classes])
-        elif index < total_elements_data1 + total_elements_data2:
-            index2 = index - total_elements_data1
-            selected_data.append(data2[index2])
-            selected_labels.append(bg_labels_12[index2 % num_bg_classes])
-        else:
-            index3 = index - (total_elements_data1 + total_elements_data2)
-            selected_data.append(data3[index3])
-            selected_labels.append(bg_labels_12[index3 % num_bg_classes])
+        num_class_samples = min(num_class_samples, len(class_indices))
 
-    selected_data = np.array(selected_data)
+        selected_class_indices = np.random.choice(class_indices, size=num_class_samples, replace=False)
+        selected_segments.extend(all_segments[selected_class_indices])
+        selected_labels.extend(all_labels[selected_class_indices])
+
+    selected_segments = np.array(selected_segments)
     selected_labels = np.array(selected_labels)
 
-    num_val = int(num_selections * validation_split)
-    num_train = num_selections - num_val
+    num_val_samples = int(validation_split * len(selected_segments))
+    split_index = len(selected_segments) - num_val_samples
 
-    x_train = selected_data[:num_train]
-    y_train = selected_labels[:num_train]
-    x_val = selected_data[num_train:]
-    y_val = selected_labels[num_train:]
+    val_segments = selected_segments[split_index:]
+    val_labels = selected_labels[split_index:]
 
-    return (x_train, y_train), (x_val, y_val)
+    train_segments = selected_segments[:split_index]
+    train_labels = selected_labels[:split_index]
 
+    one_hot_train_labels = np.zeros((len(train_labels), TimeSp, num_classes), dtype=np.float32)
+    one_hot_val_labels = np.zeros((len(val_labels), TimeSp, num_classes), dtype=np.float32)
+
+    for i in range(len(train_labels)):
+        one_hot_train_labels[i, :, train_labels[i]] = 1
+
+    for i in range(len(val_labels)):
+        one_hot_val_labels[i, :, val_labels[i]] = 1
+
+    return train_segments, one_hot_train_labels, val_segments, one_hot_val_labels
 
 
 # %%
@@ -158,43 +166,57 @@ def AGIprogressBar(count, total,start):
     print('\r[%s] %s%s ...%s sec' % (bar, percents, '%', duration),end=' ')
 
 # %%
-import time
-import numpy as np
-
-Batch = 6720
-epochs = 500
-
+Batch = 24
+epochs = 10
 rec = []
+losses = []
 st = time.time()
 
 for ep in range(epochs):
-    print(f'EP: {ep + 1}')
-    (num_train_selections, num_bg_classes, num_gesture_classes) = (150000, 3, 9)
-    ((x_train, y_train), (x_val, y_val)) = load_and_select_data(num_selections=num_train_selections, num_bg_classes=num_bg_classes, num_gesture_classes=num_gesture_classes)
-    y_train = slice_35(y_train, sequence_length=35)
-    y_val = slice_35(y_val, sequence_length=35)
-    x_train = slice_35(x_train, sequence_length=35)
-    x_val = slice_35(x_val, sequence_length=35)
+    num_train_selections = 151300
+    x_train, y_train, x_val, y_val = load_and_select_data(num_selections=num_train_selections)
 
     x_train_combined = np.concatenate((data_train, x_train), axis=0)
     y_train_combined = np.concatenate((data_train_labels, y_train), axis=0)
+
+    x_val_combined = np.concatenate((data_val, x_val), axis=0)
+    y_val_combined = np.concatenate((data_val_labels, y_val), axis=0)
+
+    print(f'EP: {ep + 1}')
+    
+    indices = np.arange(len(x_train_combined))
+    np.random.shuffle(indices)
+    x_train_combined = x_train_combined[indices]
+    y_train_combined = y_train_combined[indices]
+    epoch_loss = 0
     
     for i in range(len(x_train_combined) // Batch):
-        rand = np.random.randint(0, len(x_train_combined), size=Batch)
         AGIprogressBar(i, len(x_train_combined) // Batch, st)
 
-        x_batch = np.array([x_train_combined[idx] for idx in rand])
-        y_batch = np.array([y_train_combined[idx] for idx in rand])
+        x_batch = x_train_combined[i*Batch:(i+1)*Batch]
+        y_batch = y_train_combined[i*Batch:(i+1)*Batch]
 
         resultSt = model.train_on_batch(x_batch, y_batch)
+        batch_loss = resultSt[0]
+        epoch_loss += batch_loss
+    
+    epoch_loss /= (len(x_train_combined) // Batch)
+    losses.append(epoch_loss)
+    print(f'Loss = {epoch_loss}')
 
-    pre = model.predict(x_val, verbose=0)
+    # Predict on validation data
+    pre = model.predict(x_val_combined, verbose=0)
 
-    # Calculate accuracy
-    acc = np.sum(np.argmax(pre, axis=2) == np.argmax(y_val, axis=2)) / y_val.size 
-    print(f'ACC = {acc}')
+    total_predictions = len(y_val_combined) * y_val_combined.shape[1]
+
+    correct_predictions = np.sum(np.argmax(pre, axis=2) == np.argmax(y_val_combined, axis=2))
+
+    acc = correct_predictions / total_predictions
     rec.append(acc)
+    print(f'ACC = {acc}')
 
-    if (ep + 1) % 10 == 0:
-        model.save(f'saved_model_stage2_CNN/CNN_epoch_{ep + 1}_stage1.h5')
-        print(f'Model saved at epoch {ep + 1}')
+    model.save(f'saved_model_stage1_LSTM/LSTM_epoch_{ep + 1}_stage1.h5')
+    print(f'Model saved at epoch {ep + 1}')
+
+
+
